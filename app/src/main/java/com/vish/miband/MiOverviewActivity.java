@@ -1,7 +1,12 @@
 package com.vish.miband;
 
+import java.io.IOException;
+import java.io.PipedInputStream;
+import java.io.PipedOutputStream;
 import java.util.Arrays;
 import java.util.GregorianCalendar;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Observable;
 import java.util.Observer;
 import java.util.UUID;
@@ -60,6 +65,9 @@ public class MiOverviewActivity extends Activity implements Observer {
 	private BluetoothDevice mBluetoothMi;
 	private BluetoothGatt mGatt;
 
+    private PipedInputStream dataSourceInputStream;
+    private PipedOutputStream dataSourceOutputStream;
+
 	private MiBand mMiBand = new MiBand();
 
 	// UI
@@ -68,7 +76,7 @@ public class MiOverviewActivity extends Activity implements Observer {
 	private ProgressBar mLoading;
 
 	@Override
-	protected void onCreate(Bundle savedInstanceState) {
+	protected void onCreate(Bundle savedInstanceState)  {
 		super.onCreate(savedInstanceState);
 		mDeviceAddress = getIntent().getStringExtra("address");
 
@@ -85,6 +93,14 @@ public class MiOverviewActivity extends Activity implements Observer {
 		mBluetoothAdapter = mBluetoothManager.getAdapter();
 		mBluetoothMi = mBluetoothAdapter.getRemoteDevice(mDeviceAddress);
 
+        //initialize streams
+        try{
+            dataSourceInputStream = new PipedInputStream();
+            dataSourceOutputStream = new PipedOutputStream();
+            dataSourceInputStream.connect(dataSourceOutputStream);
+        }catch (IOException ioe){
+            ioe.printStackTrace();
+        }
 	}
 
 	@Override
@@ -183,26 +199,48 @@ public class MiOverviewActivity extends Activity implements Observer {
 			 request(UUID_CHAR_REALTIME_STEPS); // start with steps
 		}
 
+        /**
+         * Took this method from original code.
+         * This should be invoked every time something recived from the band
+         * based on the characteristic we should call the notification
+         *
+         * This method is mainly for reading the activity details from the band
+         *
+         * @param bluetoothgatt
+         * @param characteristic
+         */
+        @Override
+        public final void onCharacteristicChanged(BluetoothGatt bluetoothgatt, final BluetoothGattCharacteristic characteristic)
+        {
+            Log.i("onCharacteristicChanged","UUID = "+characteristic.getUuid());
+        }
+
 		@Override
 		public void onCharacteristicRead(BluetoothGatt gatt,
 				BluetoothGattCharacteristic characteristic, int status) {
-			byte[] b = characteristic.getValue();
-			Log.i(characteristic.getUuid().toString(), "state: " + state
-					+ " value:" + Arrays.toString(b));
-
-			// handle value
-			if (characteristic.getUuid().equals(UUID_CHAR_REALTIME_STEPS))
-				mMiBand.setSteps(0xff & b[0] | (0xff & b[1]) << 8);
-			else if (characteristic.getUuid().equals(UUID_CHAR_BATTERY)) {
-				Battery battery = Battery.fromByte(b);
-				mMiBand.setBattery(battery);
-			} else if (characteristic.getUuid().equals(UUID_CHAR_DEVICE_NAME)) {
-				mMiBand.setName(new String(b));
-			} else if (characteristic.getUuid().equals(UUID_CHAR_LE_PARAMS)) {
-				LeParams params = LeParams.fromByte(b);
-				mMiBand.setLeParams(params);
-			}
-
+            byte[] b = characteristic.getValue();
+            Log.i(characteristic.getUuid().toString(), "state: " + state
+                    + " value:" + Arrays.toString(b));
+                // handle value
+                if (characteristic.getUuid().equals(UUID_CHAR_REALTIME_STEPS))
+                    mMiBand.setSteps(0xff & b[0] | (0xff & b[1]) << 8);
+                else if (characteristic.getUuid().equals(UUID_CHAR_BATTERY)) {
+                    Battery battery = Battery.fromByte(b);
+                    mMiBand.setBattery(battery);
+                } else if (characteristic.getUuid().equals(UUID_CHAR_DEVICE_NAME)) {
+                    mMiBand.setName(new String(b));
+                } else if (characteristic.getUuid().equals(UUID_CHAR_LE_PARAMS)) {
+                    LeParams params = LeParams.fromByte(b);
+                    mMiBand.setLeParams(params);
+                } else  if(characteristic.getUuid().equals(UUID_CHAR_ACTIVITY)){
+                    //this will happen multiple times
+                    Log.i("onCharacteristicRead","Got response for characteristic activity");
+                    try {
+                        dataSourceOutputStream.write(b);
+                    }catch (IOException ioe){
+                        ioe.printStackTrace();
+                    }
+                }
 			// proceed with state machine (called in the beginning)
 			state++;
 			switch (state) {
@@ -218,6 +256,9 @@ public class MiOverviewActivity extends Activity implements Observer {
 			case 3:
 				request(UUID_CHAR_LE_PARAMS);
 				break;
+            case 4:
+                request(UUID_CHAR_ACTIVITY);
+                break;
 			}
 		}
 	};
